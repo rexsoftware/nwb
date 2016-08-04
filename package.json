@@ -1,7 +1,7 @@
 {
   "name": "@rexsoftware/nwb",
   "description": "CLI tool for React apps and components & plain JS apps and npm modules",
-  "version": "0.12.0-alpha.0",
+  "version": "0.12.0-alpha.rex.0",
   "license": "MIT",
   "author": "Jonny Buchanan <jonathan.buchanan@gmail.com>",
   "bin": {
