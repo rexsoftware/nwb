@@ -292,15 +292,22 @@ function getCopyPluginArgs(buildConfig, userConfig) {
  *   not handled here, but by the final merge of webpack.extra config).
  */
 export function createPlugins(server, buildConfig = {}, userConfig = {}) {
+  let development = process.env.NODE_ENV === 'development'
   let production = process.env.NODE_ENV === 'production'
 
   let plugins = [
     // Enforce case-sensitive import paths
     new CaseSensitivePathsPlugin(),
+    // Replace specified expressions with values
+    new webpack.DefinePlugin({
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
+      ...buildConfig.define,
+      ...userConfig.define,
+    }),
   ]
 
   // Fail the build if there are compilation errors when running on CI
-  if (process.env.CONTINUOUS_INTEGRATION === 'true') {
+  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
     plugins.push(failPlugin)
   }
 
@@ -318,19 +325,9 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
     // Use paths as names when serving
     plugins.push(new webpack.NamedModulesPlugin())
   }
-
-  // Replace certain expressions with values
-  plugins.push(
-    new webpack.DefinePlugin({
-      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
-      ...buildConfig.define,
-      ...userConfig.define,
-    }),
-  )
-
   // If we're not serving, we're creating a static build
-  if (!server) {
-    // Extract CSS into files
+  else {
+    // Extract CSS required as modules out into files
     let cssFilename = production ? `[name].[contenthash:8].css` : '[name].css'
     plugins.push(new ExtractTextPlugin(cssFilename, {
       ...userConfig.extractText,
@@ -349,13 +346,15 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
       }))
     }
 
-    // If we're generating an HTML file, we must be building a webapp, so
+    // If we're generating an HTML file, we must be building a web app, so
     // configure deterministic hashing for long-term caching.
     if (buildConfig.html) {
       plugins.push(
-        // Generate stable module ids by hashing module paths instead of
-        // assigning integers.
-        new HashedModuleIdsPlugin(),
+        // Generate stable module ids instead of having Webpack assign integers.
+        // HashedModuleIdsPlugin (vendored from Webpack 2) does this without
+        // adding too much to bundle size and NamedModulesPlugin allows for
+        // easier debugging of development builds.
+        development ? new webpack.NamedModulesPlugin() : new HashedModuleIdsPlugin(),
         // The MD5 Hash plugin seems to make [chunkhash] for .js files behave
         // like [contenthash] does for extracted .css files, which is essential
         // for deterministic hashing.
@@ -372,7 +371,9 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
 
   if (production) {
     plugins.push(
-      new optimize.DedupePlugin(),
+      // Temporariy commented out to prevent an error in __webpack_require__
+      // See https://github.com/webpack/webpack/issues/959#issuecomment-237438754
+      // new optimize.DedupePlugin(),
       new optimize.UglifyJsPlugin(merge({
         compress: {
           screw_ie8: true,
@@ -389,9 +390,9 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
     )
   }
 
+  // Generate an HTML file for web apps which pulls in generated resources
   if (buildConfig.html) {
     plugins.push(
-      // Generate the app's HTML file
       new HtmlPlugin({
         chunksSortMode: 'dependency',
         template: path.join(__dirname, '../templates/webpack-template.html'),
@@ -401,12 +402,15 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
     )
   }
 
+  // Copy static resources
   if (buildConfig.copy) {
     plugins.push(
       new CopyPlugin(...getCopyPluginArgs(buildConfig.copy, userConfig.copy))
     )
   }
 
+  // Automatically install missing npm dependencies and add them to package.json
+  // Must be enabled with an --install or --auto-install flag
   if (buildConfig.install) {
     plugins.push(new NpmInstallPlugin({
       ...buildConfig.install,
@@ -414,10 +418,12 @@ export function createPlugins(server, buildConfig = {}, userConfig = {}) {
     }))
   }
 
+  // Insert a banner comment at the top of generated files - used for UMD builds
   if (buildConfig.banner) {
     plugins.push(new webpack.BannerPlugin(buildConfig.banner))
   }
 
+  // Escape hatch for any extra plugins a particular build ever needs to add
   if (buildConfig.extra) {
     plugins = plugins.concat(buildConfig.extra)
   }
